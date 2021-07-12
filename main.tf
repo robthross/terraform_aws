@@ -80,7 +80,7 @@ module "nlb" {
   load_balancer_type = "network"
 
   vpc_id  = aws_vpc.hml-vpc.id
-  subnets = [aws_subnet.hml-subnet-1.id]
+  
 
   access_logs = {
     bucket = "hml-nlb-logs"
