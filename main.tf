@@ -1,7 +1,7 @@
 provider "aws" {
     region = "us-east-2"
-    access_key = "AKIA5X5I25IFM7XFDZDQ"
-    secret_key = "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"
+    access_key = "{{ USER_KEY }}"
+    secret_key = "{{ SECRET_KEY }}"
 }
 
 resource "aws_vpc" "hml-vpc" {
