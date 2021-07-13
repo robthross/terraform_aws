@@ -1,8 +1,15 @@
+
+
 provider "aws" {
     region = "us-east-2"
-    access_key = "{{ USER_KEY }}"
-    secret_key = "{{ SECRET_KEY }}"
+    access_key = var.aws_user_key 
+    secret_key = var.aws_secret_key
 }
+
+variable "aws_user_key"{}
+variable "aws_secret_key"{}
+variable "aws_region" {}
+variable "aws_domain"{}
 
 resource "aws_vpc" "hml-vpc" {
     cidr_block = "10.10.0.0/24"
@@ -12,7 +19,7 @@ resource "aws_vpc" "hml-vpc" {
 resource "aws_subnet" "hml-subnet-1" {
     vpc_id              = aws_vpc.hml-vpc.id
     cidr_block          = "10.10.0.0/25"
-    availability_zone   = "us-east-2a"
+    availability_zone   = var.aws_region
   
 }
 
@@ -23,6 +30,11 @@ resource "aws_network_interface" "hml-nic" {
   tags = {
     Name = "hml_network_interface"
   }
+}
+
+resource "aws_eip" "lb" {
+  instance = aws_instance.hml-instancia.id
+  vpc      = true
 }
 
 resource "aws_instance" "hml-instancia" {
@@ -71,48 +83,69 @@ resource "aws_elasticache_cluster" "hml-redis" {
   port                 = 6379
 }
 
-module "nlb" {
-  source  = "terraform-aws-modules/alb/aws"
-  version = "~> 6.0"
+resource "aws_acm_certificate" "hml-cert" {
+  domain_name       = var.aws_domain
+  validation_method = "DNS"
+}
 
-  name = "hml-nlb"
+data "aws_route53_zone" "external" {
+  name = var.aws_domain
+}
+resource "aws_route53_record" "rec" {
+  name    = var.aws_domain
+  type    = "A"
+  zone_id = data.aws_route53_zone.external.zone_id
+  records = [aws_eip.lb.publi_ip]
+  ttl     = "300"
+}
 
-  load_balancer_type = "network"
+resource "aws_acm_certificate_validation" "hml-valid" {
+  certificate_arn = aws_acm_certificate.hml-cert.arn
+  validation_record_fqdns = [
+    aws_route53_record.rec.fqdn,
+  ]
+}
 
-  vpc_id  = aws_vpc.hml-vpc.id
-  
+resource "aws_elb" "hml-elb" {
+  name               = "hml-elb"
+  availability_zones = ["us-west-2a", "us-west-2b", "us-west-2c"]
 
-  access_logs = {
-    bucket = "hml-nlb-logs"
+  access_logs {
+    bucket        = "hml-promo"
+    bucket_prefix = "hml-promo"
+    interval      = 60
   }
 
-  target_groups = [
-    {
-      name_prefix      = "pref-"
-      backend_protocol = "TCP"
-      backend_port     = 80
-      target_type      = "ip"
-    }
-  ]
+  listener {
+    instance_port     = 8000
+    instance_protocol = "http"
+    lb_port           = 80
+    lb_protocol       = "http"
+  }
 
-  https_listeners = [
-    {
-      port               = 443
-      protocol           = "TLS"
-      certificate_arn    = "arn:aws:iam::123456789012:server-certificate/test_cert-123456789012"
-      target_group_index = 0
-    }
-  ]
+  listener {
+    instance_port      = 8000
+    instance_protocol  = "http"
+    lb_port            = 443
+    lb_protocol        = "https"
+    ssl_certificate_id = aws_acm_certificate.hml-cert.arn
+  }
 
-  http_tcp_listeners = [
-    {
-      port               = 80
-      protocol           = "TCP"
-      target_group_index = 0
-    }
-  ]
+  health_check {
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    timeout             = 3
+    target              = "HTTP:8000/"
+    interval            = 30
+  }
+
+  instances                   = [aws_instance.hml-instancia.id]
+  cross_zone_load_balancing   = true
+  idle_timeout                = 400
+  connection_draining         = true
+  connection_draining_timeout = 400
 
   tags = {
-    Environment = "hml-test"
+    Name = "hmlpromo-elb"
   }
 }
